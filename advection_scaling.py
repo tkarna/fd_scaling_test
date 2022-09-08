@@ -3,6 +3,7 @@ import math
 import time as time_mod
 import argparse
 from pyop2.profiling import timed_stage
+from firedrake.assemble import OneFormAssembler
 
 
 def run_problem(refine, no_exports=True, nsteps=None):
@@ -85,12 +86,13 @@ def run_problem(refine, no_exports=True, nsteps=None):
     dq = fd.Function(V)
 
     params = {'ksp_type': 'preonly', 'pc_type': 'bjacobi', 'sub_pc_type': 'ilu'}
-    prob1 = fd.LinearVariationalProblem(a, L1, dq, constant_jacobian=True)
-    solv1 = fd.LinearVariationalSolver(prob1, solver_parameters=params)
-    prob2 = fd.LinearVariationalProblem(a, L2, dq, constant_jacobian=True)
-    solv2 = fd.LinearVariationalSolver(prob2, solver_parameters=params)
-    prob3 = fd.LinearVariationalProblem(a, L3, dq, constant_jacobian=True)
-    solv3 = fd.LinearVariationalSolver(prob3, solver_parameters=params)
+    mass_matrix = fd.assemble(a)
+    lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
+
+    mu = fd.Function(V)
+    L1_assembler = OneFormAssembler(L1, mu, needs_zeroing=True)
+    L2_assembler = OneFormAssembler(L2, mu, needs_zeroing=True)
+    L3_assembler = OneFormAssembler(L3, mu, needs_zeroing=True)
 
     if not no_exports:
         output_freq = 20 * refine
@@ -99,22 +101,28 @@ def run_problem(refine, no_exports=True, nsteps=None):
     t = 0.0
     step = 0
     # take first step outside the timed loop
-    solv1.solve()
+    L1_assembler.assemble()
+    lin_solver.solve(dq, mu)
     q1.assign(q + dq)
-    solv2.solve()
+    L2_assembler.assemble()
+    lin_solver.solve(dq, mu)
     q2.assign(0.75*q + 0.25*(q1 + dq))
-    solv3.solve()
+    L3_assembler.assemble()
+    lin_solver.solve(dq, mu)
     q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
     step += 1
     t += dt
     with timed_stage('Time loop'):
         tic = time_mod.perf_counter()
         while (t < T - 0.5*dt) and ((nsteps is None) or (step <= nsteps)):
-            solv1.solve()
+            L1_assembler.assemble()
+            lin_solver.solve(dq, mu)
             q1.assign(q + dq)
-            solv2.solve()
+            L2_assembler.assemble()
+            lin_solver.solve(dq, mu)
             q2.assign(0.75*q + 0.25*(q1 + dq))
-            solv3.solve()
+            L3_assembler.assemble()
+            lin_solver.solve(dq, mu)
             q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
             step += 1
             t += dt
