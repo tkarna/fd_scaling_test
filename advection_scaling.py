@@ -89,10 +89,9 @@ def run_problem(refine, no_exports=True, nsteps=None):
     mass_matrix = fd.assemble(a)
     lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
 
-    mu = fd.Function(V)
-    L1_assembler = OneFormAssembler(L1, mu, needs_zeroing=True)
-    L2_assembler = OneFormAssembler(L2, mu, needs_zeroing=True)
-    L3_assembler = OneFormAssembler(L3, mu, needs_zeroing=True)
+    L1_assembler = OneFormAssembler(L1, q1, needs_zeroing=True)
+    L2_assembler = OneFormAssembler(L2, q2, needs_zeroing=True)
+    L3_assembler = OneFormAssembler(L3, q1, needs_zeroing=True)
 
     if not no_exports:
         output_freq = 20 * refine
@@ -102,13 +101,13 @@ def run_problem(refine, no_exports=True, nsteps=None):
     step = 0
     # take first step outside the timed loop
     L1_assembler.assemble()
-    lin_solver.solve(dq, mu)
+    lin_solver.solve(dq, q1)
     q1.assign(q + dq)
     L2_assembler.assemble()
-    lin_solver.solve(dq, mu)
+    lin_solver.solve(dq, q2)
     q2.assign(0.75*q + 0.25*(q1 + dq))
     L3_assembler.assemble()
-    lin_solver.solve(dq, mu)
+    lin_solver.solve(dq, q1)
     q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
     step += 1
     t += dt
@@ -116,13 +115,13 @@ def run_problem(refine, no_exports=True, nsteps=None):
         tic = time_mod.perf_counter()
         while (t < T - 0.5*dt) and ((nsteps is None) or (step <= nsteps)):
             L1_assembler.assemble()
-            lin_solver.solve(dq, mu)
+            lin_solver.solve(dq, q1)
             q1.assign(q + dq)
             L2_assembler.assemble()
-            lin_solver.solve(dq, mu)
+            lin_solver.solve(dq, q2)
             q2.assign(0.75*q + 0.25*(q1 + dq))
             L3_assembler.assemble()
-            lin_solver.solve(dq, mu)
+            lin_solver.solve(dq, q1)
             q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
             step += 1
             t += dt
