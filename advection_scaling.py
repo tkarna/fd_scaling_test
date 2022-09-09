@@ -102,27 +102,31 @@ def run_problem(refine, no_exports=True, nsteps=None):
     # take first step outside the timed loop
     L1_assembler.assemble()
     lin_solver.solve(dq, q1)
-    q1.assign(q + dq)
+    q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
     L2_assembler.assemble()
     lin_solver.solve(dq, q2)
-    q2.assign(0.75*q + 0.25*(q1 + dq))
+    q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
+        0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
     L3_assembler.assemble()
     lin_solver.solve(dq, q1)
-    q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
+    q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
+        (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
     step += 1
     t += dt
+    tic = time_mod.perf_counter()
     with timed_stage('Time loop'):
-        tic = time_mod.perf_counter()
         while (t < T - 0.5*dt) and ((nsteps is None) or (step <= nsteps)):
             L1_assembler.assemble()
             lin_solver.solve(dq, q1)
-            q1.assign(q + dq)
+            q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
             L2_assembler.assemble()
             lin_solver.solve(dq, q2)
-            q2.assign(0.75*q + 0.25*(q1 + dq))
+            q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
+                0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
             L3_assembler.assemble()
             lin_solver.solve(dq, q1)
-            q.assign((1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
+            q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
+                (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
             step += 1
             t += dt
             if not no_exports and step % output_freq == 0:
