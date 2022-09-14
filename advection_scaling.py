@@ -11,8 +11,14 @@ def run_problem(refine, no_exports=True, nsteps=None):
     mesh = fd.UnitSquareMesh(nx, nx, quadrilateral=True)
     comm = mesh.comm
 
+    compute_final_error = nsteps is None
+
     T = 2*math.pi
-    dt = T/600.0/refine
+    revolutions = 1
+    steps_per_revolution = 600*refine
+    dt = T/steps_per_revolution
+    if nsteps is None:
+        nsteps = revolutions * steps_per_revolution
 
     V = fd.FunctionSpace(mesh, "DQ", 1)
     W = fd.VectorFunctionSpace(mesh, "CG", 1)
@@ -115,7 +121,7 @@ def run_problem(refine, no_exports=True, nsteps=None):
     t += dt
     tic = time_mod.perf_counter()
     with timed_stage('Time loop'):
-        while (t < T - 0.5*dt) and ((nsteps is None) or (step <= nsteps)):
+        for i in range(nsteps - 1):
             L1_assembler.assemble()
             lin_solver.solve(dq, q1)
             q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
@@ -139,8 +145,7 @@ def run_problem(refine, no_exports=True, nsteps=None):
     L2_init = fd.errornorm(q_analytical, q_init)
     if comm.rank == 0:
         print(f'Initial L2 error: {L2_init}')
-    if nsteps is None:
-        # Computing final error only makes sense with full iteration
+    if compute_final_error:
         L2_final = fd.errornorm(q_analytical, q)
         if comm.rank == 0:
             print(f'Final L2 error: {L2_final}')
