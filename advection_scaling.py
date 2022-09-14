@@ -4,6 +4,80 @@ import time as time_mod
 import argparse
 from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
+from functools import partial
+from firedrake.petsc import PETSc
+
+
+class FastAssembler:
+    def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None, needs_zeroing=True):
+        self.assembler = OneFormAssembler(form, tensor, needs_zeroing=needs_zeroing)
+        self.assembler.assemble()  # warm cache
+        self._needs_zeroing = needs_zeroing
+        self._tensor = tensor
+        self.parloops = []
+        for p in self.assembler.parloops:
+            f = FastParloop(p)
+            self.parloops.append(f)
+
+    def assemble(self):
+        """Perform the assembly.
+
+        :returns: The assembled object.
+        """
+        if self._needs_zeroing:
+            self._tensor.dat.zero()
+
+        for parloop in self.parloops:
+            parloop()
+
+        # for bc in self._bcs:
+        #     if isinstance(bc, EquationBC):  # can this be lifted?
+        #         bc = bc.extract_form("F")
+        #     self._apply_bc(bc)
+
+        return self._tensor
+
+
+class FastParloop:
+    def __init__(self, parloop):
+        self.parloop = parloop
+
+        assert not self.parloop._has_mats  # skip replace_lgmaps()
+        assert len(self.parloop._reduction_idxs) == 0  # skip reduction
+        assert len(self.parloop.reduced_globals) == 0  # skip global increments
+
+        kernel = self.parloop.global_kernel
+        kernel_cache_key = id(self.parloop.comm)
+        c_func = kernel._func_cache[kernel_cache_key]
+
+        start_core = self.parloop.iterset.core_part.offset
+        end_core = start_core + self.parloop.iterset.core_part.size
+
+        start_own = self.parloop.iterset.owned_part.offset
+        end_own = start_own + self.parloop.iterset.owned_part.size
+
+        self.c_func_core = partial(c_func.__call__, start_core, end_core, *self.parloop.arglist)
+        self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
+
+    # @mpi.collective
+    @PETSc.Log.EventDecorator("ParLoopExecute")
+    def __call__(self):
+        """Execute the kernel over all members of the iteration space."""
+        # self.parloop.zero_global_increments()
+        # orig_lgmaps = self.parloop.replace_lgmaps()
+        self.parloop.global_to_local_begin()
+        # self.parloop._compute(self.parloop.iterset.core_part)
+        self.c_func_core()
+        self.parloop.global_to_local_end()
+        # self.parloop._compute(self.parloop.iterset.owned_part)
+        self.c_func_owned()
+        # requests = self.parloop.reduction_begin()
+        self.parloop.local_to_global_begin()
+        self.parloop.update_arg_data_state()
+        # self.parloop.restore_lgmaps(orig_lgmaps)
+        # self.parloop.reduction_end(requests)
+        # self.parloop.finalize_global_increments()
+        self.parloop.local_to_global_end()
 
 
 def run_problem(refine, no_exports=True, nsteps=None):
@@ -99,6 +173,10 @@ def run_problem(refine, no_exports=True, nsteps=None):
     L2_assembler = OneFormAssembler(L2, q2, needs_zeroing=True)
     L3_assembler = OneFormAssembler(L3, q1, needs_zeroing=True)
 
+    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True)
+    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True)
+    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True)
+
     if not no_exports:
         output_freq = 20 * refine
         outfile = fd.File('output.pvd')
@@ -106,14 +184,14 @@ def run_problem(refine, no_exports=True, nsteps=None):
     t = 0.0
     step = 0
     # take first step outside the timed loop
-    L1_assembler.assemble()
+    L1_fassembler.assemble()
     lin_solver.solve(dq, q1)
     q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-    L2_assembler.assemble()
+    L2_fassembler.assemble()
     lin_solver.solve(dq, q2)
     q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
         0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-    L3_assembler.assemble()
+    L3_fassembler.assemble()
     lin_solver.solve(dq, q1)
     q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
         (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
@@ -122,14 +200,14 @@ def run_problem(refine, no_exports=True, nsteps=None):
     tic = time_mod.perf_counter()
     with timed_stage('Time loop'):
         for i in range(nsteps - 1):
-            L1_assembler.assemble()
+            L1_fassembler.assemble()
             lin_solver.solve(dq, q1)
             q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-            L2_assembler.assemble()
+            L2_fassembler.assemble()
             lin_solver.solve(dq, q2)
             q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
                 0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-            L3_assembler.assemble()
+            L3_fassembler.assemble()
             lin_solver.solve(dq, q1)
             q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
                 (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
