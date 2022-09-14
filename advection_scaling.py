@@ -6,6 +6,25 @@ from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
 from functools import partial
 from firedrake.petsc import PETSc
+from firedrake.assemble_expressions import Assign, evaluate_expression, dereffed
+
+
+class FastAssign:
+    def __init__(self, lvalue, rvalue):
+        self.assign_op = Assign(lvalue, rvalue)
+        evaluate_expression(self.assign_op)  # warm cache
+
+        # get parloop handle
+        fast_key = self.assign_op.fast_key
+        expr_cache = self.assign_op.lvalue._expression_cache
+        arguments = expr_cache[fast_key]
+        kernel, iterset, weak_args = arguments[0]
+        with dereffed(weak_args) as args:
+            parloop_obj = fd.op2.LegacyParloop(kernel, iterset, *args)
+            self.parloop = FastParloop(parloop_obj)
+
+    def __call__(self):
+        self.parloop()
 
 
 class FastAssembler:
@@ -177,6 +196,10 @@ def run_problem(refine, no_exports=True, nsteps=None):
     L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True)
     L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True)
 
+    assign_q1 = FastAssign(q1, q + dq)
+    assign_q2 = FastAssign(q2, 0.75*q + 0.25*(q1 + dq))
+    assign_q3 = FastAssign(q, (1.0/3.0)*q + (2.0/3.0)*(q2 + dq))
+
     if not no_exports:
         output_freq = 20 * refine
         outfile = fd.File('output.pvd')
@@ -186,15 +209,13 @@ def run_problem(refine, no_exports=True, nsteps=None):
     # take first step outside the timed loop
     L1_fassembler.assemble()
     lin_solver.solve(dq, q1)
-    q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
+    assign_q1()
     L2_fassembler.assemble()
     lin_solver.solve(dq, q2)
-    q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
-        0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
+    assign_q2()
     L3_fassembler.assemble()
     lin_solver.solve(dq, q1)
-    q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
-        (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
+    assign_q3()
     step += 1
     t += dt
     tic = time_mod.perf_counter()
@@ -202,15 +223,13 @@ def run_problem(refine, no_exports=True, nsteps=None):
         for i in range(nsteps - 1):
             L1_fassembler.assemble()
             lin_solver.solve(dq, q1)
-            q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
+            assign_q1()
             L2_fassembler.assemble()
             lin_solver.solve(dq, q2)
-            q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
-                0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
+            assign_q2()
             L3_fassembler.assemble()
             lin_solver.solve(dq, q1)
-            q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
-                (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
+            assign_q3()
             step += 1
             t += dt
             if not no_exports and step % output_freq == 0:
