@@ -60,7 +60,7 @@ class FastParloop:
         self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
 
     # @mpi.collective
-    @PETSc.Log.EventDecorator("ParLoopExecute")
+    # @PETSc.Log.EventDecorator("ParLoopExecute")
     def __call__(self):
         """Execute the kernel over all members of the iteration space."""
         # self.parloop.zero_global_increments()
