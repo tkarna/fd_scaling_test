@@ -20,6 +20,104 @@ class FastAssembler:
             f = FastParloop(p, no_inc_zeroing=needs_zeroing)
             self.parloops.append(f)
 
+        # get local2global (dat, access_mode) pairs
+        arg_pairs = []
+        for p in self.parloops:
+            for idx in p.parloop._g2l_idxs:
+                dat = p.parloop.arguments[idx].data
+                access_mode = p.parloop.accesses[idx]
+                e = (dat, access_mode)
+                if e not in arg_pairs:
+                    arg_pairs.append(e)
+        g2l_entries = arg_pairs
+
+        # get global2local (dat, access_mode) pairs
+        arg_pairs = []
+        for p in self.parloops:
+            for idx in p.parloop._l2g_idxs:
+                dat = p.parloop.arguments[idx].data
+                access_mode = p.parloop.accesses[idx]
+                e = (dat, access_mode)
+                if e not in arg_pairs:
+                    arg_pairs.append(e)
+        l2g_entries = arg_pairs
+
+        ops = []
+        for dat, access_mode in g2l_entries:
+            halo = dat.dataset.halo
+            if halo is None:
+                continue
+            if access_mode in {fd.READ, fd.RW}:
+                # op = partial(halo.global_to_local_begin, dat, fd.WRITE)
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_begin(dat, fd.WRITE)
+                op = partial(update, dat, halo)
+            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
+                def set_halos(dat, val):
+                    dat._data[dat.dataset.size:] = val
+                if access_mode == fd.INC and self._needs_zeroing:
+                    continue
+                min_, max_ = dtypes.dtype_limits(dat.dtype)
+                val = {fd.MAX: min_, fd.MIN: max_, fd.INC: 0}[access_mode]
+                op = partial(set_halos, dat, val)
+            else:
+                continue
+            # op = partial(dat.global_to_local_begin, access_mode=access_mode)
+            ops.append(op)
+        self.g2l_begin_ops = tuple(ops)
+
+        ops = []
+        for dat, access_mode in g2l_entries:
+            halo = dat.dataset.halo
+            if halo is None:
+                continue
+            if access_mode in {fd.READ, fd.RW}:
+                # op = partial(halo.global_to_local_end, dat, fd.WRITE)
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_end(dat, fd.WRITE)
+                op = partial(update, dat, halo)
+            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
+                def set_halos(dat):
+                    dat.halo_valid = False
+                op = partial(set_halos, dat)
+            else:
+                continue
+            # op = partial(dat.global_to_local_end, access_mode=access_mode)
+            ops.append(op)
+        self.g2l_end_ops = tuple(ops)
+
+        ops = []
+        for dat, insert_mode in l2g_entries:
+            halo = dat.dataset.halo
+            if halo is None:
+                continue
+            op = partial(halo.local_to_global_begin, dat, insert_mode)
+            # op = partial(dat.local_to_global_begin, insert_mode=insert_mode)
+            ops.append(op)
+        self.l2g_begin_ops = tuple(ops)
+
+        ops = []
+        for dat, insert_mode in l2g_entries:
+            halo = dat.dataset.halo
+            if halo is None:
+                continue
+
+            def update(dat, halo, insert_mode):
+                halo.local_to_global_end(dat, insert_mode)
+                dat.halo_valid = False
+
+            op = partial(update, dat, halo, insert_mode)
+            # op = partial(dat.local_to_global_end, insert_mode=insert_mode)
+            ops.append(op)
+        self.l2g_end_ops = tuple(ops)
+
+        # print('g2l_begin', len(self.g2l_begin_ops))
+        # print('g2l_end', len(self.g2l_end_ops))
+        # print('l2g_begin', len(self.l2g_begin_ops))
+        # print('l2g_end', len(self.l2g_end_ops))
+
     def initialize(self):
         for p in self.parloops:
             p.initialize()
@@ -35,24 +133,20 @@ class FastAssembler:
         # for parloop in self.parloops:
         #     parloop()
 
+        for op in self.g2l_begin_ops:
+            op()
         for p in self.parloops:
-            p.c_func_full()
-
-        # for p in self.parloops:
-        #     for op in p.g2l_begin_ops:
-        #         op()
-        # for p in self.parloops:
-        #     p.c_func_core()
-        # for p in self.parloops:
-        #     for op in p.g2l_end_ops:
-        #         op()
-        # for p in self.parloops:
-        #     p.c_func_owned()
-        #     for op in p.l2g_begin_ops:
-        #         op()
-        #     p.parloop.update_arg_data_state()
-        #     for op in p.l2g_end_ops:
-        #         op()
+            p.c_func_core()
+        for op in self.g2l_end_ops:
+            op()
+        for p in self.parloops:
+            p.c_func_owned()
+        for op in self.l2g_begin_ops:
+            op()
+        for p in self.parloops:
+            p.parloop.update_arg_data_state()
+        for op in self.l2g_end_ops:
+            op()
 
         return self._tensor
 
@@ -296,62 +390,62 @@ def run_problem(refine, no_exports=True, nsteps=None):
     step = 0
     # take first step outside the timed loop
     q.dat.halo_valid = False  # need to invalidate q for proper init
-    q.dat.global_to_local_begin(fd.READ)
-    q.dat.global_to_local_end(fd.READ)
+    # q.dat.global_to_local_begin(fd.READ)
+    # q.dat.global_to_local_end(fd.READ)
     L1_fassembler.initialize()
     L1_fassembler.assemble()
-    q1.dat.local_to_global_begin(fd.INC)
-    q1.dat.local_to_global_end(fd.INC)
+    # q1.dat.local_to_global_begin(fd.INC)
+    # q1.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q1)
     q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-    q1.dat.global_to_local_begin(fd.READ)
-    q1.dat.global_to_local_end(fd.READ)
+    # q1.dat.global_to_local_begin(fd.READ)
+    # q1.dat.global_to_local_end(fd.READ)
     L2_fassembler.initialize()
     L2_fassembler.assemble()
-    q2.dat.local_to_global_begin(fd.INC)
-    q2.dat.local_to_global_end(fd.INC)
+    # q2.dat.local_to_global_begin(fd.INC)
+    # q2.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q2)
     q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
         0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-    q2.dat.global_to_local_begin(fd.READ)
-    q2.dat.global_to_local_end(fd.READ)
+    # q2.dat.global_to_local_begin(fd.READ)
+    # q2.dat.global_to_local_end(fd.READ)
     L3_fassembler.initialize()
     L3_fassembler.assemble()
-    q1.dat.local_to_global_begin(fd.INC)
-    q1.dat.local_to_global_end(fd.INC)
+    # q1.dat.local_to_global_begin(fd.INC)
+    # q1.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q1)
     q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
         (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
-    q.dat.global_to_local_begin(fd.READ)
-    q.dat.global_to_local_end(fd.READ)
+    # q.dat.global_to_local_begin(fd.READ)
+    # q.dat.global_to_local_end(fd.READ)
     step += 1
     t += dt
     tic = time_mod.perf_counter()
     with timed_stage('Time loop'):
         for i in range(nsteps - 1):
             L1_fassembler.assemble()
-            q1.dat.local_to_global_begin(fd.INC)
-            q1.dat.local_to_global_end(fd.INC)
+            # q1.dat.local_to_global_begin(fd.INC)
+            # q1.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q1)
             q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-            q1.dat.global_to_local_begin(fd.READ)
-            q1.dat.global_to_local_end(fd.READ)
+            # q1.dat.global_to_local_begin(fd.READ)
+            # q1.dat.global_to_local_end(fd.READ)
             L2_fassembler.assemble()
-            q2.dat.local_to_global_begin(fd.INC)
-            q2.dat.local_to_global_end(fd.INC)
+            # q2.dat.local_to_global_begin(fd.INC)
+            # q2.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q2)
             q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
                 0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-            q2.dat.global_to_local_begin(fd.READ)
-            q2.dat.global_to_local_end(fd.READ)
+            # q2.dat.global_to_local_begin(fd.READ)
+            # q2.dat.global_to_local_end(fd.READ)
             L3_fassembler.assemble()
-            q1.dat.local_to_global_begin(fd.INC)
-            q1.dat.local_to_global_end(fd.INC)
+            # q1.dat.local_to_global_begin(fd.INC)
+            # q1.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q1)
             q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
                 (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
-            q.dat.global_to_local_begin(fd.READ)
-            q.dat.global_to_local_end(fd.READ)
+            # q.dat.global_to_local_begin(fd.READ)
+            # q.dat.global_to_local_end(fd.READ)
             step += 1
             t += dt
             if not no_exports and step % output_freq == 0:
