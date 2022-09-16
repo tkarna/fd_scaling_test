@@ -6,6 +6,7 @@ from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
 from functools import partial
 from pyop2.types import Dat
+from pyop2 import datatypes as dtypes
 
 
 class FastAssembler:
@@ -56,30 +57,78 @@ class FastParloop:
 
         ops = []
         for idx in self.parloop._g2l_idxs:
-            op = partial(Dat.global_to_local_begin, access_mode=self.parloop.accesses[idx])
-            op2 = partial(op, self.parloop.arguments[idx].data)
-            ops.append(op2)
+            dat = self.parloop.arguments[idx].data
+            halo = dat.dataset.halo
+            access_mode = self.parloop.accesses[idx]
+            if halo is None:
+                continue
+            if access_mode in {fd.READ, fd.RW}:
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_begin(dat, fd.WRITE)
+                op = partial(update, dat, halo)
+            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
+                def set_halos(dat, val):
+                    dat._data[dat.dataset.size:] = val
+                min_, max_ = dtypes.dtype_limits(dat.dtype)
+                val = {fd.MAX: min_, fd.MIN: max_, fd.INC: 0}[access_mode]
+                op = partial(set_halos, dat, val)
+            else:
+                continue
+            # op = partial(dat.global_to_local_begin, access_mode=access_mode)
+            ops.append(op)
         self.g2l_begin_ops = tuple(ops)
 
         ops = []
         for idx in self.parloop._g2l_idxs:
-            op = partial(Dat.global_to_local_end, access_mode=self.parloop.accesses[idx])
-            op2 = partial(op, self.parloop.arguments[idx].data)
-            ops.append(op2)
+            dat = self.parloop.arguments[idx].data
+            halo = dat.dataset.halo
+            access_mode = self.parloop.accesses[idx]
+            if halo is None:
+                continue
+            if access_mode in {fd.READ, fd.RW}:
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_end(dat, fd.WRITE)
+                        dat.halo_valid = True
+                op = partial(update, dat, halo)
+            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
+                def set_halos(dat):
+                    dat.halo_valid = False
+                op = partial(set_halos, dat)
+            else:
+                continue
+            # op = partial(dat.global_to_local_end, access_mode=access_mode)
+            ops.append(op)
         self.g2l_end_ops = tuple(ops)
 
         ops = []
         for idx in self.parloop._l2g_idxs:
-            op = partial(Dat.local_to_global_begin, insert_mode=self.parloop.accesses[idx])
-            op2 = partial(op, self.parloop.arguments[idx].data)
-            ops.append(op2)
+            dat = self.parloop.arguments[idx].data
+            halo = dat.dataset.halo
+            insert_mode = self.parloop.accesses[idx]
+            if halo is None:
+                continue
+            op = partial(halo.local_to_global_begin, dat, insert_mode)
+            # op = partial(dat.local_to_global_begin, insert_mode=insert_mode)
+            ops.append(op)
         self.l2g_begin_ops = tuple(ops)
 
         ops = []
         for idx in self.parloop._l2g_idxs:
-            op = partial(Dat.local_to_global_end, insert_mode=self.parloop.accesses[idx])
-            op2 = partial(op, self.parloop.arguments[idx].data)
-            ops.append(op2)
+            dat = self.parloop.arguments[idx].data
+            halo = dat.dataset.halo
+            insert_mode = self.parloop.accesses[idx]
+            if halo is None:
+                continue
+
+            def update(dat, halo, insert_mode):
+                halo.local_to_global_end(dat, insert_mode)
+                dat.halo_valid = False
+
+            op = partial(update, dat, halo, insert_mode)
+            # op = partial(dat.local_to_global_end, insert_mode=insert_mode)
+            ops.append(op)
         self.l2g_end_ops = tuple(ops)
 
     # @PETSc.Log.EventDecorator("ParLoopExecute")
