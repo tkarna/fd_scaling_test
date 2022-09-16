@@ -20,6 +20,10 @@ class FastAssembler:
             f = FastParloop(p)
             self.parloops.append(f)
 
+    def initialize(self):
+        for p in self.parloops:
+            p.initialize()
+
     def assemble(self):
         """Perform the assembly.
 
@@ -55,6 +59,9 @@ class FastParloop:
         self.c_func_core = partial(c_func.__call__, start_core, end_core, *self.parloop.arglist)
         self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
 
+        self._initialized = False
+
+    def initialize(self):
         ops = []
         for idx in self.parloop._g2l_idxs:
             dat = self.parloop.arguments[idx].data
@@ -62,11 +69,8 @@ class FastParloop:
             access_mode = self.parloop.accesses[idx]
             if halo is None:
                 continue
-            if access_mode in {fd.READ, fd.RW}:
-                def update(dat, halo):
-                    if not dat.halo_valid:
-                        halo.global_to_local_begin(dat, fd.WRITE)
-                op = partial(update, dat, halo)
+            if not dat.halo_valid and access_mode in {fd.READ, fd.RW}:
+                op = partial(halo.global_to_local_begin, dat, fd.WRITE)
             elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
                 def set_halos(dat, val):
                     dat._data[dat.dataset.size:] = val
@@ -86,12 +90,8 @@ class FastParloop:
             access_mode = self.parloop.accesses[idx]
             if halo is None:
                 continue
-            if access_mode in {fd.READ, fd.RW}:
-                def update(dat, halo):
-                    if not dat.halo_valid:
-                        halo.global_to_local_end(dat, fd.WRITE)
-                        dat.halo_valid = True
-                op = partial(update, dat, halo)
+            if not dat.halo_valid and access_mode in {fd.READ, fd.RW}:
+                op = partial(halo.global_to_local_end, dat, fd.WRITE)
             elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
                 def set_halos(dat):
                     dat.halo_valid = False
@@ -131,6 +131,7 @@ class FastParloop:
             ops.append(op)
         self.l2g_end_ops = tuple(ops)
 
+        self._initialized = True
         # print('g2l_begin_ops', len(self.g2l_begin_ops))
         # for idx in self.parloop._g2l_idxs:
         #     print(self.parloop.accesses[idx], self.parloop.arguments[idx].data)
@@ -141,6 +142,7 @@ class FastParloop:
     # @PETSc.Log.EventDecorator("ParLoopExecute")
     def __call__(self):
         """Execute the kernel over all members of the iteration space."""
+        assert self._initialized
         for op in self.g2l_begin_ops:
             op()
         self.c_func_core()
@@ -258,13 +260,17 @@ def run_problem(refine, no_exports=True, nsteps=None):
     t = 0.0
     step = 0
     # take first step outside the timed loop
+    q.dat.halo_valid = False  # need to invalidate q for proper init
+    L1_fassembler.initialize()
     L1_fassembler.assemble()
     lin_solver.solve(dq, q1)
     q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
+    L2_fassembler.initialize()
     L2_fassembler.assemble()
     lin_solver.solve(dq, q2)
     q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
         0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
+    L3_fassembler.initialize()
     L3_fassembler.assemble()
     lin_solver.solve(dq, q1)
     q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
