@@ -17,7 +17,7 @@ class FastAssembler:
         self._tensor = tensor
         self.parloops = []
         for p in self.assembler.parloops:
-            f = FastParloop(p)
+            f = FastParloop(p, no_inc_zeroing=needs_zeroing)
             self.parloops.append(f)
 
     def initialize(self):
@@ -39,8 +39,9 @@ class FastAssembler:
 
 
 class FastParloop:
-    def __init__(self, parloop):
+    def __init__(self, parloop, no_inc_zeroing=False):
         self.parloop = parloop
+        self.no_inc_zeroing = no_inc_zeroing
 
         assert not self.parloop._has_mats  # skip replace_lgmaps()
         assert len(self.parloop._reduction_idxs) == 0  # skip reduction
@@ -77,6 +78,8 @@ class FastParloop:
                 min_, max_ = dtypes.dtype_limits(dat.dtype)
                 val = {fd.MAX: min_, fd.MIN: max_, fd.INC: 0}[access_mode]
                 op = partial(set_halos, dat, val)
+                if access_mode == fd.INC and self.no_inc_zeroing:
+                    continue
             else:
                 continue
             # op = partial(dat.global_to_local_begin, access_mode=access_mode)
