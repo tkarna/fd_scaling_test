@@ -10,7 +10,8 @@ from pyop2 import datatypes as dtypes
 
 
 class FastAssembler:
-    def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None, needs_zeroing=True):
+    def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None, needs_zeroing=True,
+                 constant_inputs=None):
         self.assembler = OneFormAssembler(form, tensor, needs_zeroing=needs_zeroing)
         self.assembler.assemble()  # warm cache
         self._needs_zeroing = needs_zeroing
@@ -20,11 +21,19 @@ class FastAssembler:
             f = FastParloop(p, no_inc_zeroing=needs_zeroing)
             self.parloops.append(f)
 
+        # dats that user guarantees to be invariant
+        exclude_dat = []
+        if constant_inputs is not None:
+            for f in constant_inputs:
+                exclude_dat.append(f.dat)
+
         # get local2global (dat, access_mode) pairs
         arg_pairs = []
         for p in self.parloops:
             for idx in p.parloop._g2l_idxs:
                 dat = p.parloop.arguments[idx].data
+                if dat in exclude_dat:
+                    continue
                 access_mode = p.parloop.accesses[idx]
                 e = (dat, access_mode)
                 if e not in arg_pairs:
@@ -378,9 +387,10 @@ def run_problem(refine, no_exports=True, nsteps=None):
     L2_assembler = OneFormAssembler(L2, q2, needs_zeroing=True)
     L3_assembler = OneFormAssembler(L3, q1, needs_zeroing=True)
 
-    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True)
-    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True)
-    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True)
+    constant_funcs = [u, mesh.coordinates]
+    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True, constant_inputs=constant_funcs)
+    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True, constant_inputs=constant_funcs)
+    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True, constant_inputs=constant_funcs)
 
     if not no_exports:
         output_freq = 20 * refine
