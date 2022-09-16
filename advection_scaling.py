@@ -36,20 +36,23 @@ class FastAssembler:
         #     parloop()
 
         for p in self.parloops:
-            for op in p.g2l_begin_ops:
-                op()
-        for p in self.parloops:
-            p.c_func_core()
-        for p in self.parloops:
-            for op in p.g2l_end_ops:
-                op()
-        for p in self.parloops:
-            p.c_func_owned()
-            for op in p.l2g_begin_ops:
-                op()
-            p.parloop.update_arg_data_state()
-            for op in p.l2g_end_ops:
-                op()
+            p.c_func_full()
+
+        # for p in self.parloops:
+        #     for op in p.g2l_begin_ops:
+        #         op()
+        # for p in self.parloops:
+        #     p.c_func_core()
+        # for p in self.parloops:
+        #     for op in p.g2l_end_ops:
+        #         op()
+        # for p in self.parloops:
+        #     p.c_func_owned()
+        #     for op in p.l2g_begin_ops:
+        #         op()
+        #     p.parloop.update_arg_data_state()
+        #     for op in p.l2g_end_ops:
+        #         op()
 
         return self._tensor
 
@@ -293,62 +296,62 @@ def run_problem(refine, no_exports=True, nsteps=None):
     step = 0
     # take first step outside the timed loop
     q.dat.halo_valid = False  # need to invalidate q for proper init
-    # q.dat.global_to_local_begin(fd.READ)
-    # q.dat.global_to_local_end(fd.READ)
+    q.dat.global_to_local_begin(fd.READ)
+    q.dat.global_to_local_end(fd.READ)
     L1_fassembler.initialize()
     L1_fassembler.assemble()
-    # q1.dat.local_to_global_begin(fd.INC)
-    # q1.dat.local_to_global_end(fd.INC)
+    q1.dat.local_to_global_begin(fd.INC)
+    q1.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q1)
     q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-    # q1.dat.global_to_local_begin(fd.READ)
-    # q1.dat.global_to_local_end(fd.READ)
+    q1.dat.global_to_local_begin(fd.READ)
+    q1.dat.global_to_local_end(fd.READ)
     L2_fassembler.initialize()
     L2_fassembler.assemble()
-    # q2.dat.local_to_global_begin(fd.INC)
-    # q2.dat.local_to_global_end(fd.INC)
+    q2.dat.local_to_global_begin(fd.INC)
+    q2.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q2)
     q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
         0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-    # q2.dat.global_to_local_begin(fd.READ)
-    # q2.dat.global_to_local_end(fd.READ)
+    q2.dat.global_to_local_begin(fd.READ)
+    q2.dat.global_to_local_end(fd.READ)
     L3_fassembler.initialize()
     L3_fassembler.assemble()
-    # q1.dat.local_to_global_begin(fd.INC)
-    # q1.dat.local_to_global_end(fd.INC)
+    q1.dat.local_to_global_begin(fd.INC)
+    q1.dat.local_to_global_end(fd.INC)
     lin_solver.solve(dq, q1)
     q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
         (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
-    # q.dat.global_to_local_begin(fd.READ)
-    # q.dat.global_to_local_end(fd.READ)
+    q.dat.global_to_local_begin(fd.READ)
+    q.dat.global_to_local_end(fd.READ)
     step += 1
     t += dt
     tic = time_mod.perf_counter()
     with timed_stage('Time loop'):
         for i in range(nsteps - 1):
             L1_fassembler.assemble()
-            # q1.dat.local_to_global_begin(fd.INC)
-            # q1.dat.local_to_global_end(fd.INC)
+            q1.dat.local_to_global_begin(fd.INC)
+            q1.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q1)
             q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
-            # q1.dat.global_to_local_begin(fd.READ)
-            # q1.dat.global_to_local_end(fd.READ)
+            q1.dat.global_to_local_begin(fd.READ)
+            q1.dat.global_to_local_end(fd.READ)
             L2_fassembler.assemble()
-            # q2.dat.local_to_global_begin(fd.INC)
-            # q2.dat.local_to_global_end(fd.INC)
+            q2.dat.local_to_global_begin(fd.INC)
+            q2.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q2)
             q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
                 0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
-            # q2.dat.global_to_local_begin(fd.READ)
-            # q2.dat.global_to_local_end(fd.READ)
+            q2.dat.global_to_local_begin(fd.READ)
+            q2.dat.global_to_local_end(fd.READ)
             L3_fassembler.assemble()
-            # q1.dat.local_to_global_begin(fd.INC)
-            # q1.dat.local_to_global_end(fd.INC)
+            q1.dat.local_to_global_begin(fd.INC)
+            q1.dat.local_to_global_end(fd.INC)
             lin_solver.solve(dq, q1)
             q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
                 (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
-            # q.dat.global_to_local_begin(fd.READ)
-            # q.dat.global_to_local_end(fd.READ)
+            q.dat.global_to_local_begin(fd.READ)
+            q.dat.global_to_local_end(fd.READ)
             step += 1
             t += dt
             if not no_exports and step % output_freq == 0:
