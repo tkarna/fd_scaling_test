@@ -5,14 +5,14 @@ import argparse
 from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
 from functools import partial
-from pyop2.types import Dat
 from pyop2 import datatypes as dtypes
 
 
 class FastAssembler:
-    def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None, needs_zeroing=True,
-                 constant_inputs=None):
-        self.assembler = OneFormAssembler(form, tensor, needs_zeroing=needs_zeroing)
+    def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None,
+                 needs_zeroing=True, constant_inputs=None):
+        self.assembler = OneFormAssembler(form, tensor,
+                                          needs_zeroing=needs_zeroing)
         self.assembler.assemble()  # warm cache
         self._needs_zeroing = needs_zeroing
         self._tensor = tensor
@@ -168,9 +168,12 @@ class FastParloop:
         start_full = start_core
         end_full = end_own
 
-        self.c_func_core = partial(c_func.__call__, start_core, end_core, *self.parloop.arglist)
-        self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
-        self.c_func_full = partial(c_func.__call__, start_full, end_full, *self.parloop.arglist)
+        self.c_func_core = partial(c_func.__call__, start_core, end_core,
+                                   *self.parloop.arglist)
+        self.c_func_owned = partial(c_func.__call__, start_own, end_own,
+                                    *self.parloop.arglist)
+        self.c_func_full = partial(c_func.__call__, start_full, end_full,
+                                   *self.parloop.arglist)
 
 
 def run_problem(refine, no_exports=True, nsteps=None):
@@ -216,7 +219,6 @@ def run_problem(refine, no_exports=True, nsteps=None):
     bell_r0 = 0.15
     bell_x0 = 0.25
     bell_y0 = 0.5
-    cone_r0 = 0.15
     cone_x0 = 0.5
     cone_y0 = 0.25
     cyl_r0 = 0.15
@@ -226,11 +228,16 @@ def run_problem(refine, no_exports=True, nsteps=None):
     slot_right = 0.525
     slot_top = 0.85
 
-    bell = 0.25*(1+fd.cos(math.pi*fd.min_value(fd.sqrt(pow(x-bell_x0, 2) + pow(y-bell_y0, 2))/bell_r0, 1.0)))
-    cone = 1.0 - fd.min_value(fd.sqrt(pow(x-cone_x0, 2) + pow(y-cone_y0, 2))/cyl_r0, 1.0)
-    slot_cyl = fd.conditional(fd.sqrt(pow(x-cyl_x0, 2) + pow(y-cyl_y0, 2)) < cyl_r0,
-                fd.conditional(fd.And(fd.And(x > slot_left, x < slot_right), y < slot_top),
-                0.0, 1.0), 0.0)
+    bell = 0.25*(1+fd.cos(math.pi*fd.min_value(fd.sqrt(pow(x-bell_x0, 2) +
+                 pow(y-bell_y0, 2))/bell_r0, 1.0)))
+    cone = 1.0 - fd.min_value(fd.sqrt(pow(x-cone_x0, 2) + pow(y-cone_y0, 2)) /
+                              cyl_r0, 1.0)
+    slot_cyl = fd.conditional(
+        fd.sqrt(pow(x-cyl_x0, 2) + pow(y-cyl_y0, 2)) < cyl_r0,
+        fd.conditional(fd.And(fd.And(x > slot_left, x < slot_right),
+                              y < slot_top),
+                       0.0, 1.0),
+        0.0)
 
     q = fd.Function(V, name='solution')
     q_analytical = 1.0 + bell + cone + slot_cyl
@@ -246,10 +253,12 @@ def run_problem(refine, no_exports=True, nsteps=None):
 
     n = fd.FacetNormal(mesh)
     un = 0.5*(fd.dot(u, n) + abs(fd.dot(u, n)))
-    L1 = dtc*(q*fd.div(phi*u)*fd.dx
-            - fd.conditional(fd.dot(u, n) < 0, phi*fd.dot(u, n)*q_in, 0.0)*fd.ds
-            - fd.conditional(fd.dot(u, n) > 0, phi*fd.dot(u, n)*q, 0.0)*fd.ds
-            - (phi('+') - phi('-'))*(un('+')*q('+') - un('-')*q('-'))*fd.dS)
+    L1 = dtc*(
+        q*fd.div(phi*u)*fd.dx
+        - fd.conditional(fd.dot(u, n) < 0, phi*fd.dot(u, n)*q_in, 0.0)*fd.ds
+        - fd.conditional(fd.dot(u, n) > 0, phi*fd.dot(u, n)*q, 0.0)*fd.ds
+        - (phi('+') - phi('-'))*(un('+')*q('+') - un('-')*q('-'))*fd.dS
+    )
 
     q1 = fd.Function(V, name='q1')
     q2 = fd.Function(V, name='q2')
@@ -258,14 +267,19 @@ def run_problem(refine, no_exports=True, nsteps=None):
 
     dq = fd.Function(V)
 
-    params = {'ksp_type': 'preonly', 'pc_type': 'bjacobi', 'sub_pc_type': 'ilu'}
+    params = {
+        'ksp_type': 'preonly', 'pc_type': 'bjacobi', 'sub_pc_type': 'ilu'
+    }
     mass_matrix = fd.assemble(a)
     lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
 
     constant_funcs = [u, mesh.coordinates]
-    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True, constant_inputs=constant_funcs)
-    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True, constant_inputs=constant_funcs)
-    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True, constant_inputs=constant_funcs)
+    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True,
+                                  constant_inputs=constant_funcs)
+    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True,
+                                  constant_inputs=constant_funcs)
+    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True,
+                                  constant_inputs=constant_funcs)
 
     if not no_exports:
         output_freq = 20 * refine
@@ -333,7 +347,8 @@ def process_args():
                         help='Run only given number of steps')
     args, unknown_args = parser.parse_known_args()
 
-    run_problem(args.refine, no_exports=not args.store_output, nsteps=args.nsteps)
+    run_problem(args.refine, no_exports=not args.store_output,
+                nsteps=args.nsteps)
 
 
 if __name__ == '__main__':
