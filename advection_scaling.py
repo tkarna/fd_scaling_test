@@ -32,8 +32,24 @@ class FastAssembler:
         if self._needs_zeroing:
             self._tensor.dat.zero()
 
-        for parloop in self.parloops:
-            parloop()
+        # for parloop in self.parloops:
+        #     parloop()
+
+        for p in self.parloops:
+            for op in p.g2l_begin_ops:
+                op()
+        for p in self.parloops:
+            p.c_func_core()
+        for p in self.parloops:
+            for op in p.g2l_end_ops:
+                op()
+        for p in self.parloops:
+            p.c_func_owned()
+            for op in p.l2g_begin_ops:
+                op()
+            p.parloop.update_arg_data_state()
+            for op in p.l2g_end_ops:
+                op()
 
         return self._tensor
 
@@ -74,8 +90,12 @@ class FastParloop:
             access_mode = self.parloop.accesses[idx]
             if halo is None:
                 continue
-            if not dat.halo_valid and access_mode in {fd.READ, fd.RW}:
-                op = partial(halo.global_to_local_begin, dat, fd.WRITE)
+            if access_mode in {fd.READ, fd.RW}:
+                # op = partial(halo.global_to_local_begin, dat, fd.WRITE)
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_begin(dat, fd.WRITE)
+                op = partial(update, dat, halo)
             elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
                 def set_halos(dat, val):
                     dat._data[dat.dataset.size:] = val
@@ -97,8 +117,12 @@ class FastParloop:
             access_mode = self.parloop.accesses[idx]
             if halo is None:
                 continue
-            if not dat.halo_valid and access_mode in {fd.READ, fd.RW}:
-                op = partial(halo.global_to_local_end, dat, fd.WRITE)
+            if access_mode in {fd.READ, fd.RW}:
+                # op = partial(halo.global_to_local_end, dat, fd.WRITE)
+                def update(dat, halo):
+                    if not dat.halo_valid:
+                        halo.global_to_local_end(dat, fd.WRITE)
+                op = partial(update, dat, halo)
             elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
                 def set_halos(dat):
                     dat.halo_valid = False
