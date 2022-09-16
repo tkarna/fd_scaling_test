@@ -5,7 +5,6 @@ import argparse
 from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
 from functools import partial
-from firedrake.petsc import PETSc
 
 
 class FastAssembler:
@@ -29,11 +28,6 @@ class FastAssembler:
 
         for parloop in self.parloops:
             parloop()
-
-        # for bc in self._bcs:
-        #     if isinstance(bc, EquationBC):  # can this be lifted?
-        #         bc = bc.extract_form("F")
-        #     self._apply_bc(bc)
 
         return self._tensor
 
@@ -59,24 +53,15 @@ class FastParloop:
         self.c_func_core = partial(c_func.__call__, start_core, end_core, *self.parloop.arglist)
         self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
 
-    # @mpi.collective
     # @PETSc.Log.EventDecorator("ParLoopExecute")
     def __call__(self):
         """Execute the kernel over all members of the iteration space."""
-        # self.parloop.zero_global_increments()
-        # orig_lgmaps = self.parloop.replace_lgmaps()
         self.parloop.global_to_local_begin()
-        # self.parloop._compute(self.parloop.iterset.core_part)
         self.c_func_core()
         self.parloop.global_to_local_end()
-        # self.parloop._compute(self.parloop.iterset.owned_part)
         self.c_func_owned()
-        # requests = self.parloop.reduction_begin()
         self.parloop.local_to_global_begin()
         self.parloop.update_arg_data_state()
-        # self.parloop.restore_lgmaps(orig_lgmaps)
-        # self.parloop.reduction_end(requests)
-        # self.parloop.finalize_global_increments()
         self.parloop.local_to_global_end()
 
 
