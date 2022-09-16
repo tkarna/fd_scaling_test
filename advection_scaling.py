@@ -131,6 +131,13 @@ class FastParloop:
             ops.append(op)
         self.l2g_end_ops = tuple(ops)
 
+        # print('g2l_begin_ops', len(self.g2l_begin_ops))
+        # for idx in self.parloop._g2l_idxs:
+        #     print(self.parloop.accesses[idx], self.parloop.arguments[idx].data)
+        # print('l2g_begin_ops', len(self.l2g_begin_ops))
+        # for idx in self.parloop._l2g_idxs:
+        #     print(self.parloop.accesses[idx], self.parloop.arguments[idx].data)
+
     # @PETSc.Log.EventDecorator("ParLoopExecute")
     def __call__(self):
         """Execute the kernel over all members of the iteration space."""
@@ -184,7 +191,7 @@ def run_problem(refine, no_exports=True, nsteps=None):
         print(f'Time step: {dt:.3e}')
 
     velocity = fd.as_vector((0.5 - y, x - 0.5))
-    u = fd.Function(W).interpolate(velocity)
+    u = fd.Function(W, name='u').interpolate(velocity)
 
     # cosine-bell--cone--slotted-cylinder initial coniditon
     bell_r0 = 0.15
@@ -209,7 +216,7 @@ def run_problem(refine, no_exports=True, nsteps=None):
     q = fd.Function(V, name='solution')
     q_analytical = 1.0 + bell + cone + slot_cyl
     q.project(q_analytical)
-    q_init = fd.Function(V).assign(q)
+    q_init = fd.Function(V, name='q_init').assign(q)
 
     dtc = fd.Constant(dt)
     q_in = fd.Constant(1.0)
@@ -225,8 +232,8 @@ def run_problem(refine, no_exports=True, nsteps=None):
             - fd.conditional(fd.dot(u, n) > 0, phi*fd.dot(u, n)*q, 0.0)*fd.ds
             - (phi('+') - phi('-'))*(un('+')*q('+') - un('-')*q('-'))*fd.dS)
 
-    q1 = fd.Function(V)
-    q2 = fd.Function(V)
+    q1 = fd.Function(V, name='q1')
+    q2 = fd.Function(V, name='q2')
     L2 = fd.replace(L1, {q: q1})
     L3 = fd.replace(L1, {q: q2})
 
