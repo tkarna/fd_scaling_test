@@ -5,6 +5,7 @@ import argparse
 from pyop2.profiling import timed_stage
 from firedrake.assemble import OneFormAssembler
 from functools import partial
+from pyop2.types import Dat
 
 
 class FastAssembler:
@@ -53,16 +54,48 @@ class FastParloop:
         self.c_func_core = partial(c_func.__call__, start_core, end_core, *self.parloop.arglist)
         self.c_func_owned = partial(c_func.__call__, start_own, end_own, *self.parloop.arglist)
 
+        ops = []
+        for idx in self.parloop._g2l_idxs:
+            op = partial(Dat.global_to_local_begin, access_mode=self.parloop.accesses[idx])
+            op2 = partial(op, self.parloop.arguments[idx].data)
+            ops.append(op2)
+        self.g2l_begin_ops = tuple(ops)
+
+        ops = []
+        for idx in self.parloop._g2l_idxs:
+            op = partial(Dat.global_to_local_end, access_mode=self.parloop.accesses[idx])
+            op2 = partial(op, self.parloop.arguments[idx].data)
+            ops.append(op2)
+        self.g2l_end_ops = tuple(ops)
+
+        ops = []
+        for idx in self.parloop._l2g_idxs:
+            op = partial(Dat.local_to_global_begin, insert_mode=self.parloop.accesses[idx])
+            op2 = partial(op, self.parloop.arguments[idx].data)
+            ops.append(op2)
+        self.l2g_begin_ops = tuple(ops)
+
+        ops = []
+        for idx in self.parloop._l2g_idxs:
+            op = partial(Dat.local_to_global_end, insert_mode=self.parloop.accesses[idx])
+            op2 = partial(op, self.parloop.arguments[idx].data)
+            ops.append(op2)
+        self.l2g_end_ops = tuple(ops)
+
     # @PETSc.Log.EventDecorator("ParLoopExecute")
     def __call__(self):
         """Execute the kernel over all members of the iteration space."""
-        self.parloop.global_to_local_begin()
+        for op in self.g2l_begin_ops:
+            op()
         self.c_func_core()
-        self.parloop.global_to_local_end()
+        for op in self.g2l_end_ops:
+            op()
         self.c_func_owned()
-        self.parloop.local_to_global_begin()
+        for op in self.l2g_begin_ops:
+            op()
         self.parloop.update_arg_data_state()
-        self.parloop.local_to_global_end()
+        for op in self.l2g_end_ops:
+            op()
 
 
 def run_problem(refine, no_exports=True, nsteps=None):
