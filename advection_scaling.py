@@ -66,7 +66,7 @@ class FastAssembler:
             for f in constant_inputs:
                 exclude_dat.append(f.dat)
 
-        # get local2global (dat, access_mode) pairs
+        # get global2local (dat, access_mode) pairs
         arg_pairs = []
         for p in self.parloops:
             for idx in p.parloop._g2l_idxs:
@@ -79,7 +79,7 @@ class FastAssembler:
                     arg_pairs.append(e)
         g2l_entries = arg_pairs
 
-        # get global2local (dat, access_mode) pairs
+        # get local2global (dat, access_mode) pairs
         arg_pairs = []
         for p in self.parloops:
             for idx in p.parloop._l2g_idxs:
@@ -313,19 +313,25 @@ def run_problem(refine, no_exports=True, nsteps=None):
     step += 1
     t += dt
     tic = time_mod.perf_counter()
+    one_third = 1.0/3.0
+    two_third = 2.0/3.0
     with timed_stage('Time loop'):
         for i in range(nsteps - 1):
             L1_fassembler.assemble()
             lin_solver.solve(dq, q1)
-            q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
+            q1.dat.zero()
+            with q1.dat.vec_wo as q1_w, q.dat.vec_ro as q_r, dq.dat.vec_ro as dq_r:
+                q1_w.maxpy([1, 1], [q_r, dq_r])
             L2_fassembler.assemble()
             lin_solver.solve(dq, q2)
-            q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
-                0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
+            q2.dat.zero()
+            with q2.dat.vec_wo as q2_w, q.dat.vec_ro as q_r, q1.dat.vec_ro as q1_r, dq.dat.vec_ro as dq_r:
+                q2_w.maxpy([0.75, 0.25, 0.25], [q_r, q1_r, dq_r])
             L3_fassembler.assemble()
             lin_solver.solve(dq, q1)
-            q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
-                (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
+            with q.dat.vec_wo as q_w, q2.dat.vec_ro as q2_r, dq.dat.vec_ro as dq_r:
+                q_w.scale(one_third)
+                q_w.maxpy([two_third, two_third], [q2_r, dq_r])
             step += 1
             t += dt
             if not no_exports and step % output_freq == 0:
