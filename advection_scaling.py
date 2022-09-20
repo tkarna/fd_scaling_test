@@ -8,6 +8,37 @@ from functools import partial
 from pyop2 import datatypes as dtypes
 
 
+class FastParloop:
+    """
+    Faster Parloop execution via a reference to the C function
+
+    The function reference includes the arguments, assumed to be fixed.
+    """
+    def __init__(self, parloop, no_inc_zeroing=False):
+        self.parloop = parloop
+        self.no_inc_zeroing = no_inc_zeroing
+
+        kernel = self.parloop.global_kernel
+        kernel_cache_key = id(self.parloop.comm)
+        c_func = kernel._func_cache[kernel_cache_key]
+
+        start_core = self.parloop.iterset.core_part.offset
+        end_core = start_core + self.parloop.iterset.core_part.size
+
+        start_own = self.parloop.iterset.owned_part.offset
+        end_own = start_own + self.parloop.iterset.owned_part.size
+
+        start_full = start_core
+        end_full = end_own
+
+        self.c_func_core = partial(c_func.__call__, start_core, end_core,
+                                   *self.parloop.arglist)
+        self.c_func_owned = partial(c_func.__call__, start_own, end_own,
+                                    *self.parloop.arglist)
+        self.c_func_full = partial(c_func.__call__, start_full, end_full,
+                                   *self.parloop.arglist)
+
+
 class FastAssembler:
     """
     Speed up OneFormAssembler by precomputing as much as possible.
@@ -155,37 +186,6 @@ class FastAssembler:
         return self._tensor
 
 
-class FastParloop:
-    """
-    Faster Parloop execution via a reference to the C function
-
-    The function reference includes the arguments, assumed to be fixed.
-    """
-    def __init__(self, parloop, no_inc_zeroing=False):
-        self.parloop = parloop
-        self.no_inc_zeroing = no_inc_zeroing
-
-        kernel = self.parloop.global_kernel
-        kernel_cache_key = id(self.parloop.comm)
-        c_func = kernel._func_cache[kernel_cache_key]
-
-        start_core = self.parloop.iterset.core_part.offset
-        end_core = start_core + self.parloop.iterset.core_part.size
-
-        start_own = self.parloop.iterset.owned_part.offset
-        end_own = start_own + self.parloop.iterset.owned_part.size
-
-        start_full = start_core
-        end_full = end_own
-
-        self.c_func_core = partial(c_func.__call__, start_core, end_core,
-                                   *self.parloop.arglist)
-        self.c_func_owned = partial(c_func.__call__, start_own, end_own,
-                                    *self.parloop.arglist)
-        self.c_func_full = partial(c_func.__call__, start_full, end_full,
-                                   *self.parloop.arglist)
-
-
 def run_problem(refine, no_exports=True, nsteps=None):
     nx = 40*refine
     mesh = fd.UnitSquareMesh(nx, nx, quadrilateral=True)
@@ -283,6 +283,7 @@ def run_problem(refine, no_exports=True, nsteps=None):
     mass_matrix = fd.assemble(a)
     lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
 
+    # These functions do not change in the time loop, skip halo exchange
     constant_funcs = [u, mesh.coordinates]
     L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True,
                                   constant_inputs=constant_funcs)
