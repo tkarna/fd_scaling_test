@@ -9,6 +9,9 @@ from pyop2 import datatypes as dtypes
 
 
 class FastAssembler:
+    """
+    Speed up OneFormAssembler by precomputing as much as possible.
+    """
     def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None,
                  needs_zeroing=True, constant_inputs=None):
         self.assembler = OneFormAssembler(form, tensor,
@@ -18,10 +21,15 @@ class FastAssembler:
         self._tensor = tensor
         self.parloops = []
         for p in self.assembler.parloops:
+            # assert we can skip some operations in __call__()
+            assert not p._has_mats  # skip replace_lgmaps()
+            assert len(p._reduction_idxs) == 0  # skip reduction
+            assert len(p.reduced_globals) == 0  # skip global increments
             f = FastParloop(p, no_inc_zeroing=needs_zeroing)
             self.parloops.append(f)
 
         # dats that user guarantees to be invariant
+        # we can skip halo exchange for these
         exclude_dat = []
         if constant_inputs is not None:
             for f in constant_inputs:
@@ -51,6 +59,8 @@ class FastAssembler:
                     arg_pairs.append(e)
         l2g_entries = arg_pairs
 
+        # gather all g2l operations from parloops
+        # g2l_begin
         ops = []
         for dat, access_mode in g2l_entries:
             halo = dat.dataset.halo
@@ -74,6 +84,7 @@ class FastAssembler:
             ops.append(op)
         self.g2l_begin_ops = tuple(ops)
 
+        # g2l_end
         ops = []
         for dat, access_mode in g2l_entries:
             halo = dat.dataset.halo
@@ -93,6 +104,8 @@ class FastAssembler:
             ops.append(op)
         self.g2l_end_ops = tuple(ops)
 
+        # gather all l2g operations from parloops
+        # l2g_begin
         ops = []
         for dat, insert_mode in l2g_entries:
             halo = dat.dataset.halo
@@ -102,6 +115,9 @@ class FastAssembler:
             ops.append(op)
         self.l2g_begin_ops = tuple(ops)
 
+        # l2g_end
+        # NOTE there's no need to call Parloop.update_arg_data_state
+        #      because it only invalidates halos which is done by l2g_end
         ops = []
         for dat, insert_mode in l2g_entries:
             halo = dat.dataset.halo
@@ -115,10 +131,6 @@ class FastAssembler:
             op = partial(update, dat, halo, insert_mode)
             ops.append(op)
         self.l2g_end_ops = tuple(ops)
-
-    def initialize(self):
-        for p in self.parloops:
-            p.initialize()
 
     def assemble(self):
         """Perform the assembly.
@@ -137,9 +149,6 @@ class FastAssembler:
             p.c_func_owned()
         for op in self.l2g_begin_ops:
             op()
-        for p in self.parloops:
-            # TODO port this too
-            p.parloop.update_arg_data_state()
         for op in self.l2g_end_ops:
             op()
 
@@ -147,13 +156,14 @@ class FastAssembler:
 
 
 class FastParloop:
+    """
+    Faster Parloop execution via a reference to the C function
+
+    The function reference includes the arguments, assumed to be fixed.
+    """
     def __init__(self, parloop, no_inc_zeroing=False):
         self.parloop = parloop
         self.no_inc_zeroing = no_inc_zeroing
-
-        assert not self.parloop._has_mats  # skip replace_lgmaps()
-        assert len(self.parloop._reduction_idxs) == 0  # skip reduction
-        assert len(self.parloop.reduced_globals) == 0  # skip global increments
 
         kernel = self.parloop.global_kernel
         kernel_cache_key = id(self.parloop.comm)
