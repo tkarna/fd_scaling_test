@@ -44,7 +44,7 @@ class FastAssembler:
     Speed up OneFormAssembler by precomputing as much as possible.
     """
     def __init__(self, form, tensor, bcs=(), form_compiler_parameters=None,
-                 needs_zeroing=True, constant_inputs=None):
+                 needs_zeroing=True):
         self.assembler = OneFormAssembler(form, tensor,
                                           needs_zeroing=needs_zeroing)
         self.assembler.assemble()  # warm cache
@@ -59,20 +59,11 @@ class FastAssembler:
             f = FastParloop(p, no_inc_zeroing=needs_zeroing)
             self.parloops.append(f)
 
-        # dats that user guarantees to be invariant
-        # we can skip halo exchange for these
-        exclude_dat = []
-        if constant_inputs is not None:
-            for f in constant_inputs:
-                exclude_dat.append(f.dat)
-
         # get global2local (dat, access_mode) pairs
         arg_pairs = []
         for p in self.parloops:
             for idx in p.parloop._g2l_idxs:
                 dat = p.parloop.arguments[idx].data
-                if dat in exclude_dat:
-                    continue
                 access_mode = p.parloop.accesses[idx]
                 e = (dat, access_mode)
                 if e not in arg_pairs:
@@ -284,13 +275,9 @@ def run_problem(refine, no_exports=True, nsteps=None):
     lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
 
     # These functions do not change in the time loop, skip halo exchange
-    constant_funcs = [u, mesh.coordinates]
-    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True,
-                                  constant_inputs=constant_funcs)
-    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True,
-                                  constant_inputs=constant_funcs)
-    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True,
-                                  constant_inputs=constant_funcs)
+    L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True)
+    L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True)
+    L3_fassembler = FastAssembler(L3, q1, needs_zeroing=True)
 
     if not no_exports:
         output_freq = 20 * refine
