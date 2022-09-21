@@ -69,6 +69,7 @@ class FastAssembler:
                 if e not in arg_pairs:
                     arg_pairs.append(e)
         g2l_entries = arg_pairs
+        self.g2l_entries = g2l_entries
 
         # get local2global (dat, access_mode) pairs
         arg_pairs = []
@@ -80,79 +81,7 @@ class FastAssembler:
                 if e not in arg_pairs:
                     arg_pairs.append(e)
         l2g_entries = arg_pairs
-
-        # gather all g2l operations from parloops
-        # g2l_begin
-        ops = []
-        for dat, access_mode in g2l_entries:
-            halo = dat.dataset.halo
-            if halo is None:
-                continue
-            if access_mode in {fd.READ, fd.RW}:
-                def update(dat, halo):
-                    if not dat.halo_valid:
-                        halo.global_to_local_begin(dat, fd.WRITE)
-                op = partial(update, dat, halo)
-            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
-                def set_halos(dat, val):
-                    dat._data[dat.dataset.size:] = val
-                if access_mode == fd.INC and self._needs_zeroing:
-                    continue
-                min_, max_ = dtypes.dtype_limits(dat.dtype)
-                val = {fd.MAX: min_, fd.MIN: max_, fd.INC: 0}[access_mode]
-                op = partial(set_halos, dat, val)
-            else:
-                continue
-            ops.append(op)
-        self.g2l_begin_ops = tuple(ops)
-
-        # g2l_end
-        ops = []
-        for dat, access_mode in g2l_entries:
-            halo = dat.dataset.halo
-            if halo is None:
-                continue
-            if access_mode in {fd.READ, fd.RW}:
-                def update(dat, halo):
-                    if not dat.halo_valid:
-                        halo.global_to_local_end(dat, fd.WRITE)
-                op = partial(update, dat, halo)
-            elif access_mode in {fd.INC, fd.MIN, fd.MAX}:
-                def set_halos(dat):
-                    dat.halo_valid = False
-                op = partial(set_halos, dat)
-            else:
-                continue
-            ops.append(op)
-        self.g2l_end_ops = tuple(ops)
-
-        # gather all l2g operations from parloops
-        # l2g_begin
-        ops = []
-        for dat, insert_mode in l2g_entries:
-            halo = dat.dataset.halo
-            if halo is None:
-                continue
-            op = partial(halo.local_to_global_begin, dat, insert_mode)
-            ops.append(op)
-        self.l2g_begin_ops = tuple(ops)
-
-        # l2g_end
-        # NOTE there's no need to call Parloop.update_arg_data_state
-        #      because it only invalidates halos which is done by l2g_end
-        ops = []
-        for dat, insert_mode in l2g_entries:
-            halo = dat.dataset.halo
-            if halo is None:
-                continue
-
-            def update(dat, halo, insert_mode):
-                halo.local_to_global_end(dat, insert_mode)
-                dat.halo_valid = False
-
-            op = partial(update, dat, halo, insert_mode)
-            ops.append(op)
-        self.l2g_end_ops = tuple(ops)
+        self.l2g_entries = l2g_entries
 
     def assemble(self):
         """Perform the assembly.
@@ -161,18 +90,18 @@ class FastAssembler:
         """
         if self._needs_zeroing:
             self._tensor.dat.zero()
-        for op in self.g2l_begin_ops:
-            op()
+        for dat, access in self.g2l_entries:
+            dat.global_to_local_begin(access)
         for p in self.parloops:
             p.c_func_core()
-        for op in self.g2l_end_ops:
-            op()
+        for dat, access in self.g2l_entries:
+            dat.global_to_local_end(access)
         for p in self.parloops:
             p.c_func_owned()
-        for op in self.l2g_begin_ops:
-            op()
-        for op in self.l2g_end_ops:
-            op()
+        for dat, access in self.l2g_entries:
+            dat.local_to_global_begin(access)
+        for dat, access in self.l2g_entries:
+            dat.local_to_global_end(access)
 
         return self._tensor
 
