@@ -203,6 +203,9 @@ def run_problem(refine, no_exports=True, nsteps=None):
     mass_matrix = fd.assemble(a)
     lin_solver = fd.LinearSolver(mass_matrix, solver_parameters=params)
 
+    # inverse mass matrix
+    inv_M = fd.assemble(fd.Tensor(fd.inner(dq_trial, phi)*fd.dx).inv)
+
     # These functions do not change in the time loop, skip halo exchange
     L1_fassembler = FastAssembler(L1, q1, needs_zeroing=True)
     L2_fassembler = FastAssembler(L2, q2, needs_zeroing=True)
@@ -216,14 +219,17 @@ def run_problem(refine, no_exports=True, nsteps=None):
     step = 0
     # take first step outside the timed loop
     L1_fassembler.assemble()
-    lin_solver.solve(dq, q1)
+    with q1.dat.vec_ro as src, dq.dat.vec_wo as res:
+        inv_M.petscmat.mult(src, res)
     q1.dat.data[:] = q.dat.data_ro[:] + dq.dat.data_ro[:]
     L2_fassembler.assemble()
-    lin_solver.solve(dq, q2)
+    with q2.dat.vec_ro as src, dq.dat.vec_wo as res:
+        inv_M.petscmat.mult(src, res)
     q2.dat.data[:] = 0.75*q.dat.data_ro[:] + \
         0.25*(q1.dat.data_ro[:] + dq.dat.data_ro[:])
     L3_fassembler.assemble()
-    lin_solver.solve(dq, q1)
+    with q1.dat.vec_ro as src, dq.dat.vec_wo as res:
+        inv_M.petscmat.mult(src, res)
     q.dat.data[:] = (1.0/3.0)*q.dat.data_ro[:] + \
         (2.0/3.0)*(q2.dat.data_ro[:] + dq.dat.data_ro[:])
     step += 1
@@ -234,17 +240,21 @@ def run_problem(refine, no_exports=True, nsteps=None):
     with timed_stage('Time loop'):
         for i in range(nsteps - 1):
             L1_fassembler.assemble()
-            lin_solver.solve(dq, q1)
+            with q1.dat.vec_ro as src, dq.dat.vec_wo as res:
+                inv_M.petscmat.mult(src, res)
+
             q1.dat.zero()
             with q1.dat.vec_wo as q1_w, q.dat.vec_ro as q_r, dq.dat.vec_ro as dq_r:
                 q1_w.maxpy([1, 1], [q_r, dq_r])
             L2_fassembler.assemble()
-            lin_solver.solve(dq, q2)
+            with q2.dat.vec_ro as src, dq.dat.vec_wo as res:
+                inv_M.petscmat.mult(src, res)
             q2.dat.zero()
             with q2.dat.vec_wo as q2_w, q.dat.vec_ro as q_r, q1.dat.vec_ro as q1_r, dq.dat.vec_ro as dq_r:
                 q2_w.maxpy([0.75, 0.25, 0.25], [q_r, q1_r, dq_r])
             L3_fassembler.assemble()
-            lin_solver.solve(dq, q1)
+            with q1.dat.vec_ro as src, dq.dat.vec_wo as res:
+                inv_M.petscmat.mult(src, res)
             with q.dat.vec_wo as q_w, q2.dat.vec_ro as q2_r, dq.dat.vec_ro as dq_r:
                 q_w.scale(one_third)
                 q_w.maxpy([two_third, two_third], [q2_r, dq_r])
